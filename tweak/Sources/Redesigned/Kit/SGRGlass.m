@@ -1,9 +1,14 @@
 #import "Core/SGCore.h"
 #import "SGRGlass.h"
 #import "SGRTokens.h"
+#import "SGRRestyle.h"
+#import "SGRRepaint.h"
 
+// iOS 26 gets the system's glass. Below it a shape is the legacy approximation when that is on and a thin
+// material blur when it is not; Reduce Transparency gives a solid fill everywhere.
 typedef NS_ENUM(NSInteger, SGRGlassMode) {
     SGRGlassModeGlass,
+    SGRGlassModeLegacy,
     SGRGlassModeBlur,
     SGRGlassModeSolid,
 };
@@ -11,6 +16,7 @@ typedef NS_ENUM(NSInteger, SGRGlassMode) {
 static SGRGlassMode glassMode(void) {
     if (SGRReduceTransparency()) return SGRGlassModeSolid;
     if (@available(iOS 26.0, *)) return SGRGlassModeGlass;
+    if (SGUseLegacyGlass()) return SGRGlassModeLegacy;
     return SGRGlassModeBlur;
 }
 
@@ -19,6 +25,9 @@ static UIView *newShape(SGRGlassMode mode) {
     switch (mode) {
         case SGRGlassModeGlass:
             shape = [[UIVisualEffectView alloc] initWithEffect:SGGlassEffect()];
+            break;
+        case SGRGlassModeLegacy:
+            shape = [[SGLegacyGlassView alloc] initWithFrame:CGRectZero];
             break;
         case SGRGlassModeBlur:
             shape = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
@@ -37,6 +46,13 @@ static UIView *newShape(SGRGlassMode mode) {
 
 static char kInsideModeKey, kFilmKey;
 
+// Where a caller's own subviews go: the content view of a visual effect view or a legacy pane, the view itself otherwise.
+static UIView *glassContent(UIView *glass) {
+    if ([glass isKindOfClass:UIVisualEffectView.class]) return ((UIVisualEffectView *)glass).contentView;
+    if ([glass isKindOfClass:SGLegacyGlassView.class]) return ((SGLegacyGlassView *)glass).contentView;
+    return glass;
+}
+
 // The film that makes a shape prominent, inside the effect's own content view so the corners clip it.
 static void keepFilm(UIView *shape, BOOL prominent, SGRGlassMode mode) {
     if (mode == SGRGlassModeSolid) {
@@ -48,10 +64,11 @@ static void keepFilm(UIView *shape, BOOL prominent, SGRGlassMode mode) {
         film.hidden = YES;
         return;
     }
-    UIView *content = [shape isKindOfClass:UIVisualEffectView.class] ? ((UIVisualEffectView *)shape).contentView : shape;
+    UIView *content = glassContent(shape);
     if (!film) {
         film = [UIView new];
-        film.backgroundColor = [UIColor colorWithWhite:1 alpha:0.14];
+        // iOS 26's prominent film is the system glass's own step (0.14); below it, the one film of the Kit's.
+        film.backgroundColor = SGBelowiOS26() ? SGRGlassFilmColor() : [UIColor colorWithWhite:1 alpha:0.14];
         film.userInteractionEnabled = NO;
         film.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         objc_setAssociatedObject(shape, &kFilmKey, film, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -99,6 +116,8 @@ static UIView *glassInside(UIView *control, const void *key, CGSize size, BOOL c
         SGShapeGlass(shape, MIN(size.width, size.height) / 2, capsule);
     }
     keepFilm(shape, prominent, mode);
+    // Every glass inside a control answers a press below iOS 26, as UIGlassEffect.isInteractive does on it.
+    if (mode == SGRGlassModeLegacy) SGGlassInteractive(control, shape);
     CGPoint middle = CGPointMake(CGRectGetMidX(control.bounds), CGRectGetMidY(control.bounds));
     if (!CGPointEqualToPoint(shape.center, middle)) shape.center = middle;
     return shape;
@@ -119,4 +138,49 @@ void SGRShowGlass(UIView *shape, BOOL shown) {
     } else {
         shape.alpha = shown ? 1 : 0;
     }
+}
+
+#pragma mark - a film over glass
+
+const CGFloat SGRBarDim = 0.45;
+
+UIView *SGRDarkenGlass(UIView *pane, const void *key, CGFloat radius, CGFloat alpha) {
+    if (@available(iOS 26.0, *)) return nil;
+    UIView *content = [pane isKindOfClass:UIVisualEffectView.class] ? ((UIVisualEffectView *)pane).contentView
+                    : [pane isKindOfClass:SGLegacyGlassView.class] ? ((SGLegacyGlassView *)pane).contentView : nil;
+    if (!content) return nil;
+    UIView *dim = SGLazyChild(content, key, ^UIView *{
+        UIView *view = [UIView new];
+        view.userInteractionEnabled = NO;
+        view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        return view;
+    });
+    UIColor *color = [UIColor colorWithWhite:0 alpha:alpha];
+    if (![dim.backgroundColor isEqual:color]) dim.backgroundColor = color;
+    if (dim.superview != content) [content insertSubview:dim atIndex:0];
+    if (!CGRectEqualToRect(dim.frame, content.bounds)) dim.frame = content.bounds;
+    if (dim.layer.cornerRadius != radius) dim.layer.cornerRadius = radius;
+    if (dim.layer.cornerCurve != pane.layer.cornerCurve) dim.layer.cornerCurve = pane.layer.cornerCurve;
+    return dim;
+}
+
+UIView *SGRGlassFilm(UIView *host, const void *key, UIView *glass, CGFloat radius) {
+    if (@available(iOS 26.0, *)) return nil;
+    UIView *film = SGLazyChild(host, key, ^UIView *{
+        UIView *view = [UIView new];
+        view.backgroundColor = SGRGlassFilmColor();
+        view.userInteractionEnabled = NO;
+        view.layer.cornerCurve = kCACornerCurveContinuous;
+        view.layer.masksToBounds = YES;
+        return view;
+    });
+    if (film.superview != host) [host insertSubview:film aboveSubview:glass];
+    if (!CGRectEqualToRect(film.frame, glass.frame)) film.frame = glass.frame;
+    if (film.layer.cornerRadius != radius) film.layer.cornerRadius = radius;
+    // The film covers its pane, and with it the pane's own highlight, so the film carries one.
+    if ([glass isKindOfClass:SGLegacyGlassView.class]) {
+        if (((SGLegacyGlassView *)glass).classic) SGLegacyGlassClassicSpecular(film.layer, film.bounds, radius);
+        else SGLegacyGlassSpecular(film.layer, film.bounds, radius);
+    }
+    return film;
 }
