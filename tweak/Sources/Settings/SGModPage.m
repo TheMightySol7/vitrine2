@@ -205,6 +205,17 @@ SGModRow *SGSliderRow(NSString *title, NSString *subtitle, double minimum, doubl
     return row;
 }
 
+SGModRow *SGSegmentRow(NSString *title, NSString *subtitle, NSArray<NSString *> *segments,
+                       NSInteger (^get)(void), void (^set)(NSInteger index)) {
+    SGModRow *row = [SGModRow new];
+    row.title = title;
+    row.subtitle = subtitle;
+    row.segments = segments;
+    row.segmentIndex = get;
+    row.setSegmentIndex = set;
+    return row;
+}
+
 // The page builds the button and its menu (-menuButtonFor:), since it is the page that reads the rows again.
 SGModRow *SGMenuRow(NSString *title, NSArray<NSString *> *choices, NSString *(^value)(void), void (^chosen)(NSInteger index)) {
     SGModRow *row = SGStatRow(title, value);
@@ -527,6 +538,153 @@ static const CGFloat kSliderTop = 12, kSliderGap = 6, kSliderHeight = 28, kSlide
 
 @end
 
+@interface SGModSegmentCell : UITableViewCell
++ (CGFloat)heightFor:(SGModRow *)row width:(CGFloat)width;
+- (void)showRow:(SGModRow *)row;
+- (void)readSegment;
+@end
+
+@implementation SGModSegmentCell {
+    SGModRow *_row;
+    UILabel *_title;
+    UILabel *_subtitle;
+    UIButton *_colorButton;
+    UISegmentedControl *_segmentedControl;
+}
+
+static const CGFloat kSegmentTop = 11, kSegmentSubGap = 3, kSegmentGap = 9, kSegmentHeight = 32, kSegmentBottom = 11;
+static const CGFloat kColorDotSize = 22;
+
++ (CGFloat)heightFor:(SGModRow *)row width:(CGFloat)width {
+    CGFloat titleH = ceil(SGTitleFont().lineHeight);
+    CGFloat subH = 0;
+    if (row.subtitle.length > 0) {
+        subH = kSegmentSubGap + SGSliderTextHeight(@"", row.subtitle, width - 32);
+    }
+    return kSegmentTop + titleH + subH + kSegmentGap + kSegmentHeight + kSegmentBottom;
+}
+
+- (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)identifier {
+    if (!(self = [super initWithStyle:style reuseIdentifier:identifier])) return nil;
+    self.selectionStyle = UITableViewCellSelectionStyleNone;
+
+    _title = [UILabel new];
+    _title.textColor = UIColor.whiteColor;
+    _title.isAccessibilityElement = NO;
+
+    _subtitle = [UILabel new];
+    _subtitle.textColor = SGGrey();
+    _subtitle.isAccessibilityElement = NO;
+
+    _colorButton = [UIButton buttonWithType:UIButtonTypeCustom];
+    _colorButton.layer.cornerRadius = kColorDotSize / 2.0;
+    _colorButton.layer.masksToBounds = YES;
+    _colorButton.layer.borderWidth = 1.0 / UIScreen.mainScreen.scale;
+    _colorButton.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.35].CGColor;
+    _colorButton.accessibilityLabel = @"Choose color";
+    [_colorButton addTarget:self action:@selector(colorTapped) forControlEvents:UIControlEventTouchUpInside];
+
+    _segmentedControl = [UISegmentedControl new];
+    [_segmentedControl addTarget:self action:@selector(segmentChanged) forControlEvents:UIControlEventValueChanged];
+
+    for (UIView *v in @[_title, _subtitle, _colorButton, _segmentedControl]) {
+        [self.contentView addSubview:v];
+    }
+    return self;
+}
+
+- (void)showRow:(SGModRow *)row {
+    _row = row;
+    _title.font = SGTitleFont();
+    _subtitle.font = SGSubtitleFont();
+    _title.text = row.title;
+    _subtitle.text = row.subtitle;
+    _subtitle.hidden = (row.subtitle.length == 0);
+
+    [_segmentedControl removeAllSegments];
+    for (NSUInteger i = 0; i < row.segments.count; i++) {
+        [_segmentedControl insertSegmentWithTitle:row.segments[i] atIndex:i animated:NO];
+    }
+    NSInteger sel = row.segmentIndex ? row.segmentIndex() : 0;
+    if (sel >= 0 && sel < (NSInteger)row.segments.count) {
+        _segmentedControl.selectedSegmentIndex = sel;
+    } else {
+        _segmentedControl.selectedSegmentIndex = UISegmentedControlNoSegment;
+    }
+
+    _segmentedControl.accessibilityLabel = row.title;
+    _segmentedControl.accessibilityHint = row.subtitle;
+
+    if (row.swatch) {
+        _colorButton.hidden = NO;
+        _colorButton.backgroundColor = row.swatch();
+        _colorButton.accessibilityLabel = [NSString stringWithFormat:@"%@ color", row.title];
+    } else {
+        _colorButton.hidden = YES;
+    }
+
+    [self setNeedsLayout];
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat width = self.contentView.bounds.size.width;
+    CGFloat side = 16.0;
+    CGFloat contentWidth = width - 2 * side;
+
+    CGFloat y = kSegmentTop;
+    CGFloat titleH = ceil(SGTitleFont().lineHeight);
+
+    if (_row.swatch) {
+        _colorButton.hidden = NO;
+        _colorButton.frame = CGRectMake(width - side - kColorDotSize, y + (titleH - kColorDotSize) / 2.0, kColorDotSize, kColorDotSize);
+        _colorButton.backgroundColor = _row.swatch();
+        CGFloat titleW = (width - side - kColorDotSize - 8.0) - side;
+        _title.frame = CGRectMake(side, y, titleW, titleH);
+    } else {
+        _colorButton.hidden = YES;
+        _title.frame = CGRectMake(side, y, contentWidth, titleH);
+    }
+    y += titleH;
+
+    if (_row.subtitle.length > 0) {
+        y += kSegmentSubGap;
+        CGSize subSize = [_subtitle sizeThatFits:CGSizeMake(contentWidth, CGFLOAT_MAX)];
+        _subtitle.frame = CGRectMake(side, y, contentWidth, subSize.height);
+        y += subSize.height;
+    }
+
+    y += kSegmentGap;
+    _segmentedControl.frame = CGRectMake(side, y, contentWidth, kSegmentHeight);
+}
+
+- (void)segmentChanged {
+    NSInteger index = _segmentedControl.selectedSegmentIndex;
+    if (_row.setSegmentIndex) _row.setSegmentIndex(index);
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+}
+
+- (void)colorTapped {
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    if (_row.colorAction) {
+        _row.colorAction();
+    } else if (_row.action) {
+        _row.action();
+    }
+}
+
+- (void)readSegment {
+    if (!_row.segmentIndex) return;
+    NSInteger sel = _row.segmentIndex();
+    if (sel >= 0 && sel < (NSInteger)_row.segments.count) {
+        _segmentedControl.selectedSegmentIndex = sel;
+    }
+    if (_row.swatch) {
+        _colorButton.backgroundColor = _row.swatch();
+    }
+}
+@end
+
 #pragma mark - rows waiting on a switch
 
 // What a disabled control fades to, about the strength of the system's tertiary label.
@@ -549,10 +707,9 @@ static void showWaiting(UITableViewCell *cell, BOOL waiting, NSString *switchTit
     cell.contentView.alpha = waiting ? kWaitingAlpha : 1;
     cell.accessoryView.alpha = waiting ? kWaitingAlpha : 1;
     cell.accessibilityHint = waiting ? [NSString stringWithFormat:@"Turn on %@ first.", switchTitle] : nil;
-    if (!waiting) return;
     for (UIControl *control in controlsIn(cell)) {
-        control.enabled = NO;
-        control.userInteractionEnabled = NO;
+        control.enabled = !waiting;
+        control.userInteractionEnabled = !waiting;
     }
 }
 
@@ -779,6 +936,7 @@ static void showWaiting(UITableViewCell *cell, BOOL waiting, NSString *switchTit
         if (!path) continue;
         SGModRow *row = [self rowAt:path];
         if ([cell isKindOfClass:SGModSliderCell.class]) [(SGModSliderCell *)cell readNumber];
+        if ([cell isKindOfClass:SGModSegmentCell.class]) [(SGModSegmentCell *)cell readSegment];
         UIButton *menu = (UIButton *)cell.accessoryView;
         if (row.menu && [menu isKindOfClass:UIButton.class] && ![menu.accessibilityValue isEqualToString:row.value()] && !menu.isTracking) {
             cell.accessoryView = [self menuButtonFor:row];
@@ -795,6 +953,10 @@ static void showWaiting(UITableViewCell *cell, BOOL waiting, NSString *switchTit
 - (void)readValues {
     for (UITableViewCell *cell in self.tableView.visibleCells) {
         if (![self.tableView indexPathForCell:cell]) continue;   // a row fading out
+        if ([cell isKindOfClass:SGModSegmentCell.class]) {
+            [(SGModSegmentCell *)cell readSegment];
+            continue;
+        }
         SGModRow *row = [self rowAt:[self.tableView indexPathForCell:cell]];
         if (SGAccessibilityTextSize() && row.value && !row.number
             && [cell.contentConfiguration isKindOfClass:UIListContentConfiguration.class]) {
@@ -839,7 +1001,9 @@ static void showWaiting(UITableViewCell *cell, BOOL waiting, NSString *switchTit
 // A slider row is laid out by hand; every other row sizes itself.
 - (CGFloat)tableView:(UITableView *)table heightForRowAtIndexPath:(NSIndexPath *)path {
     SGModRow *row = [self rowAt:path];
-    return row.number ? [SGModSliderCell heightFor:row width:table.bounds.size.width - table.layoutMargins.left - table.layoutMargins.right] : UITableViewAutomaticDimension;
+    if (row.number) return [SGModSliderCell heightFor:row width:table.bounds.size.width - table.layoutMargins.left - table.layoutMargins.right];
+    if (row.segments.count) return [SGModSegmentCell heightFor:row width:table.bounds.size.width - table.layoutMargins.left - table.layoutMargins.right];
+    return UITableViewAutomaticDimension;
 }
 
 // A section with no row showing has no heading, note or gap: they would sit over no card.
@@ -871,6 +1035,13 @@ static void showWaiting(UITableViewCell *cell, BOOL waiting, NSString *switchTit
     SGModRow *row = [self rowAt:path];
     if (row.number) {
         SGModSliderCell *cell = [table dequeueReusableCellWithIdentifier:@"slider"] ?: [[SGModSliderCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"slider"];
+        cell.backgroundColor = SGCardBackground();
+        [cell showRow:row];
+        showWaiting(cell, [self isWaiting:row], [self switchFor:row].title);
+        return cell;
+    }
+    if (row.segments.count) {
+        SGModSegmentCell *cell = [table dequeueReusableCellWithIdentifier:@"segment"] ?: [[SGModSegmentCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"segment"];
         cell.backgroundColor = SGCardBackground();
         [cell showRow:row];
         showWaiting(cell, [self isWaiting:row], [self switchFor:row].title);
