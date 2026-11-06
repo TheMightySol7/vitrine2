@@ -66,12 +66,15 @@ UIView *SGRPlayerCoverList(void);
 // The cover on screen as it is drawn, its paused shrink included, in `host`'s coordinates; CGRectNull
 // when no cover has laid out.
 CGRect SGRPlayerCoverFrameIn(UIView *host);
-// The scale the cover is drawn at: 1 while playing, its shrink while paused, so a stand-in can draw its
-// corners the size the cover's are.
-CGFloat SGRPlayerCoverScale(void);
+// Holding either side of `cover` plays at 2× until the finger lifts, with the 2× badge on it, as the player's cover does
+// (PlayerArtwork.x's SGRCoverHold): for the system tab bar's player page's cover (SystemPlayer.m). Once per view.
+void SGRPlayerAttachCoverHold(UIView *cover);
 // The band that cover sits in -- the room the player gives its artwork, between the header row and the
 // title -- in `host`'s coordinates; CGRectNull when no cover has laid out.
 CGRect SGRPlayerArtworkAreaIn(UIView *host);
+// The scale the cover is drawn at: 1 while playing, its shrink while paused, so a stand-in can draw its
+// corners the size the cover's are.
+CGFloat SGRPlayerCoverScale(void);
 // Hides the cover on screen and its shadow, or shows them again, for a stand-in to fly in its place
 // (PlayerMorph.x). Until NO, every cover laid out on screen is hidden too, the first open's included.
 void SGRPlayerSetCoverHidden(BOOL hidden);
@@ -129,6 +132,11 @@ void SGRPlayerVolumeSliderSet(UISlider *slider);
 BOOL SGRPlayerFollowsCover(void);
 void SGRPlayerSetCoverAccent(UIColor *cover);
 void SGRPlayerPaintCover(UIView *stack);
+// The color Native redesign's player page (SystemPlayer.m), which draws its own controls, lights them in: white.
+UIColor *SGRPlayerLitColor(void);
+// Native redesign's player page: the title, play and pause, and previous and next in the open lyrics button's see-through
+// white instead of white (its owner, 2026-11-02). Off until switched on, read each time the page shows.
+#define SGRKeyPlayerSoftControls @"spotifyglass.redesign.navbar.player.softControls"
 
 // Shuffle and repeat left out of the controls (PlayerControls.x), each on its own switch under Hide on the player, the
 // way the Music app keeps them off its main controls. Off until switched on, read at launch. The buttons go by alpha
@@ -166,9 +174,18 @@ BOOL SGRPlayerMotionShowing(void);
 // for the Player page's showcase. It plays only in a window, like the player's. While the player has no clip
 // it is the playing track's, which the page looks up itself, by the player's sources and Low Data Mode, into
 // the store the player reads too: nil until it is in, and with `arrived` given the lookup starts, and
-// `arrived` runs once on the main queue when a call would return it (never when nothing is found, or the
+// `arrived` runs once on the main queue when a call would return it, or when nothing was found (never when the
 // track changed). Without `arrived` it only answers with a clip already in.
 UIView *SGRPlayerMotionPreview(void (^arrived)(void));
+// The clip the player or the page has in for the shown track, and its first frame: NO while there is none (the landscape
+// player, Redesigned/Navbar/SystemLandscape.m, plays it itself).
+BOOL SGRPlayerMotionFile(NSURL **file, UIImage **poster);
+// YES when the page's lookup found no clip for `track` a moment ago: `arrived` runs then too, and the page shows Fluid at
+// once instead of keeping the last track's clip up while it waits (SystemPlayer.m's syncClipAnimated:).
+BOOL SGRPlayerMotionNoneFor(NSString *track);
+// Posted on the main queue as the player's own clip comes in or goes (a new track's clip found, none for it, given up,
+// switched off): a page showing SGRPlayerMotionPreview asks it again (the system tab bar's player page, SystemPlayer.m).
+extern NSNotificationName const SGRPlayerMotionDidChangeNotification;
 // How dark the clip is drawn (the dim's opacity, where its gradient is whole) for white text over it to keep
 // 4.5:1, or 7:1 with `contrast` (Increase Contrast), when `luminance` is the clip's bright end, its 75th
 // percentile of linear luminance; between 0.10 and 0.80, 0.15 more while the lyrics are up.
@@ -233,3 +250,12 @@ CGFloat SGRSeekShareAt(UISlider *slider, CGPoint point);
 // The more button's menu opens as the system menu with the player's own items (PlayerMenu.m). Called from
 // PlayerHeader.x with Spotify's more button on every pass; watching it again changes nothing.
 void SGRPlayerMenuWatch(UIView *button);
+// The player's own items that need nothing of Spotify's player, for a player page of the mod's (Redesigned/Navbar/
+// SystemPlayer.m): Speed, Pitch & Reverb, the backgrounds and Lyrics Source, their popovers coming from `anchor`, built
+// afresh each call.
+// The ⋯'s background buttons (Show Fluid Artwork, Show Animated Artwork, Show Visualizer, while the background is one of
+// the three) are among them, and `changed` runs after one switches the background, so the page follows at once.
+NSArray<UIMenuElement *> *SGRPlayerMenuPageItems(UIView *anchor, void (^changed)(void));
+// The backgrounds the ⋯ switches between at once (Fluid, Animated, Visualizer) as one submenu, the one shown checked and
+// named under it; nil while the background is not one of them. `changed` runs after a switch.
+UIMenu *SGRPlayerMenuArtwork(void (^changed)(void));
